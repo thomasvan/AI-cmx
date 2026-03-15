@@ -46,11 +46,49 @@ cmd_add() {
   local name="$1"
   local dir="$ACCOUNTS_DIR/$name"
   mkdir -p "$dir"
+
+  if [ -t 0 ] && [ -n "${SSH_CONNECTION:-}" ]; then
+    dim "Headless SSH detected. Options:"
+    dim "  1. Login on PC:  CODEX_HOME=/tmp/$name codex login"
+    dim "     Then copy:    scp /tmp/$name/auth.json $(whoami)@$(hostname):$dir/"
+    dim "  2. Or import:    codex-multi import $name /path/to/auth.json"
+    dim ""
+    dim "Attempting login anyway (may not work without local browser)..."
+  fi
+
   echo "Logging in as '$name'..."
   CODEX_HOME="$dir" codex login
   local email=$(get_email "$dir")
   [ -n "$email" ] && green "Added: $name ($email)" || green "Added: $name"
   [ ! -f "$DEFAULT_FILE" ] && echo "$name" > "$DEFAULT_FILE" && dim "Set as default"
+}
+
+cmd_import() {
+  local name="$1"
+  local src="$2"
+  local dir="$ACCOUNTS_DIR/$name"
+  mkdir -p "$dir"
+
+  if [ "$src" = "-" ]; then
+    dim "Paste auth.json content, then Ctrl+D:"
+    cat > "$dir/auth.json"
+  elif [ -f "$src" ]; then
+    cp "$src" "$dir/auth.json"
+  else
+    red "File not found: $src" && exit 1
+  fi
+
+  chmod 600 "$dir/auth.json"
+  local email=$(get_email "$dir")
+  [ -n "$email" ] && green "Imported: $name ($email)" || green "Imported: $name"
+  [ ! -f "$DEFAULT_FILE" ] && echo "$name" > "$DEFAULT_FILE" && dim "Set as default"
+}
+
+cmd_export() {
+  local name="$1"
+  local dir="$ACCOUNTS_DIR/$name"
+  [ ! -f "$dir/auth.json" ] && red "No auth.json for '$name'" && exit 1
+  cat "$dir/auth.json"
 }
 
 cmd_rm() {
@@ -125,25 +163,38 @@ case "$1" in
     cmd_use "$2" ;;
   status)
     cmd_status "${2:-}" ;;
+  import)
+    [ $# -lt 3 ] && red "Usage: codex-multi import <name> <auth.json | ->" && exit 1
+    cmd_import "$2" "$3" ;;
+  export)
+    [ $# -lt 2 ] && red "Usage: codex-multi export <name>" && exit 1
+    cmd_export "$2" ;;
   help|-h|--help)
     cat << 'HELP'
 codex-multi — manage multiple Codex CLI accounts
 
 Commands:
-  add <name>        Login and save a new account
-  rm <name>         Remove an account
-  ls                List all accounts (* = default)
-  use <name>        Set default account
-  status [name]     Check login status
-  <name> [args...]  Run codex with specific account
-  [args...]         Run codex with default account (if not a command above)
+  add <name>              Login and save a new account (needs browser)
+  import <name> <file|->  Import auth.json from file or stdin (headless friendly)
+  export <name>           Print auth.json to stdout
+  rm <name>               Remove an account
+  ls                      List all accounts (* = default)
+  use <name>              Set default account
+  status [name]           Check login status
+  <name> [args...]        Run codex with specific account
+  [args...]               Run codex with default account
+
+Headless setup (SSH/remote):
+  1. On PC:   CODEX_HOME=/tmp/myaccount codex login
+  2. Copy:    scp /tmp/myaccount/auth.json user@pi:~/
+  3. On Pi:   codex-multi import myaccount ~/auth.json
 
 Examples:
   codex-multi add personal
-  codex-multi add work
+  codex-multi import work /tmp/auth.json
   codex-multi use personal
   codex-multi work exec "list files"
-  codex-multi exec "list files"          # uses default
+  codex-multi exec "list files"
 HELP
     ;;
   *)
