@@ -181,7 +181,23 @@ cmd_use() {
   local name="$1"
   [ ! -d "$ACCOUNTS_DIR/$name" ] && red "Account '$name' not found" && exit 1
   echo "$name" > "$DEFAULT_FILE"
-  green "Default: $name"
+
+  # Symlink ~/.codex → account dir so bare `codex` also uses this account
+  local codex_home="$HOME/.codex"
+  if [ -L "$codex_home" ]; then
+    rm "$codex_home"
+  elif [ -d "$codex_home" ]; then
+    # Backup original ~/.codex if it's a real directory (first time only)
+    if [ ! -d "$codex_home.bak" ]; then
+      mv "$codex_home" "$codex_home.bak"
+      dim "Original ~/.codex backed up to ~/.codex.bak"
+    else
+      rm -rf "$codex_home"
+    fi
+  fi
+
+  ln -s "$ACCOUNTS_DIR/$name" "$codex_home"
+  green "Default: $name (codex + codex-multi)"
 }
 
 cmd_status() {
