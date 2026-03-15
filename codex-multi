@@ -45,17 +45,9 @@ except: pass
 cmd_add() {
   local name="$1"
   local dir="$ACCOUNTS_DIR/$name"
-  mkdir -p "$dir"
-
-  if [ -n "${SSH_CONNECTION:-}" ]; then
-    cmd_add_remote "$name"
-  else
-    echo "Logging in as '$name'..."
-    CODEX_HOME="$dir" codex login
-    local email=$(get_email "$dir")
-    [ -n "$email" ] && green "Added: $name ($email)" || green "Added: $name"
-    [ ! -f "$DEFAULT_FILE" ] && echo "$name" > "$DEFAULT_FILE" && dim "Set as default"
-  fi
+  echo "Logging in as '$name'..."
+  cmd_add_internal "$name"
+  [ ! -f "$DEFAULT_FILE" ] && echo "$name" > "$DEFAULT_FILE" && dim "Set as default"
 }
 
 cmd_add_remote() {
@@ -207,6 +199,45 @@ cmd_status() {
   CODEX_HOME="$ACCOUNTS_DIR/$name" codex login status
 }
 
+cmd_reauth() {
+  local name="$1"
+  local dir="$ACCOUNTS_DIR/$name"
+  [ ! -d "$dir" ] && red "Account '$name' not found" && exit 1
+
+  local email=$(get_email "$dir")
+  dim "Re-authenticating: $name${email:+ ($email)}"
+
+  # Backup old auth
+  [ -f "$dir/auth.json" ] && cp "$dir/auth.json" "$dir/auth.json.bak"
+
+  # Remove old auth and re-login
+  rm -f "$dir/auth.json"
+  cmd_add_internal "$name"
+
+  # Re-import to codex-lb if running
+  if curl -sf http://192.168.1.88:2455/api/accounts > /dev/null 2>&1; then
+    if [ -f "$dir/auth.json" ]; then
+      curl -sf -X POST http://192.168.1.88:2455/api/accounts/import \
+        -F "auth_json=@$dir/auth.json" > /dev/null 2>&1 && \
+        green "Re-imported to codex-lb" || dim "codex-lb import skipped"
+    fi
+  fi
+}
+
+cmd_add_internal() {
+  local name="$1"
+  local dir="$ACCOUNTS_DIR/$name"
+  mkdir -p "$dir"
+
+  if [ -n "${SSH_CONNECTION:-}" ]; then
+    cmd_add_remote "$name"
+  else
+    CODEX_HOME="$dir" codex login
+    local email=$(get_email "$dir")
+    [ -n "$email" ] && green "Done: $name ($email)" || green "Done: $name"
+  fi
+}
+
 cmd_run() {
   local name="$1"; shift
   [ ! -d "$ACCOUNTS_DIR/$name" ] && red "Account '$name' not found" && exit 1
@@ -237,6 +268,9 @@ case "$1" in
     cmd_use "$2" ;;
   status)
     cmd_status "${2:-}" ;;
+  reauth)
+    [ $# -lt 2 ] && red "Usage: codex-multi reauth <name>" && exit 1
+    cmd_reauth "$2" ;;
   import)
     [ $# -lt 3 ] && red "Usage: codex-multi import <name> <auth.json | ->" && exit 1
     cmd_import "$2" "$3" ;;
@@ -248,8 +282,9 @@ case "$1" in
 codex-multi — manage multiple Codex CLI accounts
 
 Commands:
-  add <name>              Login and save a new account (needs browser)
-  import <name> <file|->  Import auth.json from file or stdin (headless friendly)
+  add <name>              Login and save a new account
+  reauth <name>           Re-login existing account (backup old, re-import to codex-lb)
+  import <name> <file|->  Import auth.json from file or stdin
   export <name>           Print auth.json to stdout
   rm <name>               Remove an account
   ls                      List all accounts (* = default)
