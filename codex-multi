@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# codex-multi — wrapper for managing multiple Codex CLI accounts
+# Usage:
+#   codex-multi add <name>        — login and save a new account
+#   codex-multi rm <name>         — remove an account
+#   codex-multi ls                — list all accounts
+#   codex-multi use <name>        — set default account
+#   codex-multi status [name]     — check login status
+#   codex-multi <name> [args...]  — run codex with specific account
+#   codex-multi [args...]         — run codex with default account
+
+set -euo pipefail
+
+MULTI_HOME="${CODEX_MULTI_HOME:-$HOME/.codex-multi}"
+ACCOUNTS_DIR="$MULTI_HOME/accounts"
+DEFAULT_FILE="$MULTI_HOME/default"
+
+mkdir -p "$ACCOUNTS_DIR"
+
+red()   { printf '\033[31m%s\033[0m\n' "$*"; }
+green() { printf '\033[32m%s\033[0m\n' "$*"; }
+dim()   { printf '\033[90m%s\033[0m\n' "$*"; }
+
+get_default() {
+  [ -f "$DEFAULT_FILE" ] && cat "$DEFAULT_FILE" || echo ""
+}
+
+get_email() {
+  local dir="$1"
+  [ -f "$dir/auth.json" ] || return
+  python3 -c "
+import json, base64, sys
+try:
+  d = json.load(open('$dir/auth.json'))
+  token = d.get('tokens',{}).get('id_token','')
+  if token:
+    payload = token.split('.')[1]
+    payload += '=' * (4 - len(payload) % 4)
+    info = json.loads(base64.b64decode(payload))
+    print(info.get('email',''))
+except: pass
+" 2>/dev/null
+}
+
+cmd_add() {
+  local name="$1"
+  local dir="$ACCOUNTS_DIR/$name"
+  mkdir -p "$dir"
+  echo "Logging in as '$name'..."
+  CODEX_HOME="$dir" codex login
+  local email=$(get_email "$dir")
+  [ -n "$email" ] && green "Added: $name ($email)" || green "Added: $name"
+  [ ! -f "$DEFAULT_FILE" ] && echo "$name" > "$DEFAULT_FILE" && dim "Set as default"
+}
+
+cmd_rm() {
+  local name="$1"
+  local dir="$ACCOUNTS_DIR/$name"
+  [ ! -d "$dir" ] && red "Account '$name' not found" && exit 1
+  rm -rf "$dir"
+  [ "$(get_default)" = "$name" ] && rm -f "$DEFAULT_FILE"
+  green "Removed: $name"
+}
+
+cmd_ls() {
+  local default=$(get_default)
+  local found=0
+  for dir in "$ACCOUNTS_DIR"/*/; do
+    [ ! -d "$dir" ] && continue
+    found=1
+    local name=$(basename "$dir")
+    local email=$(get_email "$dir")
+    local marker="  "
+    [ "$name" = "$default" ] && marker="* "
+    if [ -n "$email" ]; then
+      printf '%s%s (%s)\n' "$marker" "$name" "$email"
+    else
+      printf '%s%s\n' "$marker" "$name"
+    fi
+  done
+  [ $found -eq 0 ] && dim "No accounts. Run: codex-multi add <name>"
+}
+
+cmd_use() {
+  local name="$1"
+  [ ! -d "$ACCOUNTS_DIR/$name" ] && red "Account '$name' not found" && exit 1
+  echo "$name" > "$DEFAULT_FILE"
+  green "Default: $name"
+}
+
+cmd_status() {
+  local name="${1:-$(get_default)}"
+  [ -z "$name" ] && red "No account specified and no default set" && exit 1
+  [ ! -d "$ACCOUNTS_DIR/$name" ] && red "Account '$name' not found" && exit 1
+  CODEX_HOME="$ACCOUNTS_DIR/$name" codex login status
+}
+
+cmd_run() {
+  local name="$1"; shift
+  [ ! -d "$ACCOUNTS_DIR/$name" ] && red "Account '$name' not found" && exit 1
+  CODEX_HOME="$ACCOUNTS_DIR/$name" codex "$@"
+}
+
+cmd_run_default() {
+  local default=$(get_default)
+  [ -z "$default" ] && red "No default account. Run: codex-multi add <name>" && exit 1
+  CODEX_HOME="$ACCOUNTS_DIR/$default" codex "$@"
+}
+
+# --- Main ---
+
+[ $# -eq 0 ] && cmd_ls && exit 0
+
+case "$1" in
+  add)
+    [ $# -lt 2 ] && red "Usage: codex-multi add <name>" && exit 1
+    cmd_add "$2" ;;
+  rm|remove)
+    [ $# -lt 2 ] && red "Usage: codex-multi rm <name>" && exit 1
+    cmd_rm "$2" ;;
+  ls|list)
+    cmd_ls ;;
+  use)
+    [ $# -lt 2 ] && red "Usage: codex-multi use <name>" && exit 1
+    cmd_use "$2" ;;
+  status)
+    cmd_status "${2:-}" ;;
+  help|-h|--help)
+    cat << 'HELP'
+codex-multi — manage multiple Codex CLI accounts
+
+Commands:
+  add <name>        Login and save a new account
+  rm <name>         Remove an account
+  ls                List all accounts (* = default)
+  use <name>        Set default account
+  status [name]     Check login status
+  <name> [args...]  Run codex with specific account
+  [args...]         Run codex with default account (if not a command above)
+
+Examples:
+  codex-multi add personal
+  codex-multi add work
+  codex-multi use personal
+  codex-multi work exec "list files"
+  codex-multi exec "list files"          # uses default
+HELP
+    ;;
+  *)
+    if [ -d "$ACCOUNTS_DIR/$1" ]; then
+      cmd_run "$@"
+    else
+      cmd_run_default "$@"
+    fi
+    ;;
+esac
