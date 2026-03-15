@@ -238,6 +238,126 @@ cmd_add_internal() {
   fi
 }
 
+cmd_doctor() {
+  local has_issue=0
+  local codex_lb_up=false
+  local codex_lb_url="http://192.168.1.88:2455"
+
+  echo ""
+  dim "━━━ codex-multi doctor ━━━"
+  echo ""
+
+  # Check codex-lb
+  if curl -sf "$codex_lb_url/api/accounts" > /dev/null 2>&1; then
+    codex_lb_up=true
+    green "codex-lb: running"
+  else
+    red "codex-lb: not running"
+    dim "  → sudo docker start codex-lb"
+    has_issue=1
+  fi
+
+  echo ""
+
+  # Check each local account
+  for dir in "$ACCOUNTS_DIR"/*/; do
+    [ ! -d "$dir" ] && continue
+    local name=$(basename "$dir")
+    local email=$(get_email "$dir")
+    local label="$name${email:+ ($email)}"
+
+    if [ ! -f "$dir/auth.json" ]; then
+      red "$label: no auth.json"
+      dim "  → cm reauth $name"
+      has_issue=1
+      continue
+    fi
+
+    # Check if token is expired
+    local expired=$(python3 -c "
+import json, time
+try:
+  d = json.load(open('$dir/auth.json'))
+  ts = d.get('tokens',{}).get('access_token','')
+  # Decode JWT exp
+  import base64
+  payload = ts.split('.')[1]
+  payload += '=' * (4 - len(payload) % 4)
+  info = json.loads(base64.b64decode(payload))
+  exp = info.get('exp', 0)
+  if exp < time.time():
+    print('expired')
+  else:
+    remaining = (exp - time.time()) / 86400
+    print(f'{remaining:.0f}d')
+except: print('unknown')
+" 2>/dev/null)
+
+    if [ "$expired" = "expired" ]; then
+      red "$label: token expired"
+      dim "  → cm reauth $name"
+      has_issue=1
+    elif [ "$expired" = "unknown" ]; then
+      dim "$label: token status unknown"
+    else
+      green "$label: token valid (${expired} remaining)"
+    fi
+  done
+
+  # Check codex-lb accounts if running
+  if $codex_lb_up; then
+    echo ""
+    dim "━━━ codex-lb accounts ━━━"
+    echo ""
+
+    python3 -c "
+import urllib.request, json
+
+resp = urllib.request.urlopen('$codex_lb_url/api/accounts')
+data = json.loads(resp.read())
+
+for acc in data.get('accounts', []):
+    email = acc['email']
+    status = acc['status']
+    usage = acc.get('usage', {})
+    primary = usage.get('primaryRemainingPercent', 0)
+    secondary = usage.get('secondaryRemainingPercent', 0)
+    name = email.split('@')[0]
+
+    if status == 'active':
+        print(f'\033[32m{email}: active (quota: {primary:.0f}% primary, {secondary:.0f}% secondary)\033[0m')
+    elif status == 'quota_exceeded':
+        reset = acc.get('resetAtSecondary', 'unknown')
+        print(f'\033[31m{email}: quota exceeded (reset: {reset})\033[0m')
+        print(f'\033[90m  → Chờ quota reset hoặc thêm account mới: cm add <name>\033[0m')
+    elif status == 'deactivated':
+        reason = acc.get('deactivationReason', 'unknown')
+        print(f'\033[31m{email}: deactivated ({reason})\033[0m')
+        print(f'\033[90m  → sudo docker stop codex-lb && cm reauth {name} && sudo docker start codex-lb\033[0m')
+    else:
+        print(f'\033[31m{email}: {status}\033[0m')
+        print(f'\033[90m  → Check codex-lb dashboard: http://192.168.1.88:2455\033[0m')
+" 2>/dev/null
+
+    local active=$(curl -sf "$codex_lb_url/api/accounts" | python3 -c "import json,sys; d=json.load(sys.stdin); print(sum(1 for a in d['accounts'] if a['status']=='active'))" 2>/dev/null)
+    local total=$(curl -sf "$codex_lb_url/api/accounts" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d['accounts']))" 2>/dev/null)
+
+    echo ""
+    if [ "$active" = "0" ]; then
+      red "⚠ Không có account nào active! AI services sẽ không hoạt động."
+      dim "  → Thêm account: sudo docker stop codex-lb && cm add <name> && sudo docker start codex-lb"
+      has_issue=1
+    else
+      green "$active/$total accounts active"
+    fi
+  fi
+
+  echo ""
+  if [ $has_issue -eq 0 ]; then
+    green "✓ All good"
+  fi
+}
+
 cmd_run() {
   local name="$1"; shift
   [ ! -d "$ACCOUNTS_DIR/$name" ] && red "Account '$name' not found" && exit 1
@@ -268,6 +388,8 @@ case "$1" in
     cmd_use "$2" ;;
   status)
     cmd_status "${2:-}" ;;
+  doctor)
+    cmd_doctor ;;
   reauth)
     [ $# -lt 2 ] && red "Usage: codex-multi reauth <name>" && exit 1
     cmd_reauth "$2" ;;
@@ -283,6 +405,7 @@ codex-multi — manage multiple Codex CLI accounts
 
 Commands:
   add <name>              Login and save a new account
+  doctor                  Check health of all accounts + codex-lb
   reauth <name>           Re-login existing account (backup old, re-import to codex-lb)
   import <name> <file|->  Import auth.json from file or stdin
   export <name>           Print auth.json to stdout
