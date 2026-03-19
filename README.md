@@ -46,6 +46,10 @@ cm status work
 # Export / import auth
 cm export personal > backup.json
 cm import restored backup.json
+
+# Back up / restore all accounts + config
+cm backup /tmp/codex-multi.tar.gz
+cm restore /tmp/codex-multi.tar.gz
 ```
 
 ## Remote / Headless Login (SSH)
@@ -68,11 +72,29 @@ scp /tmp/myaccount/auth.json user@remote:~/
 cm import myaccount ~/auth.json
 ```
 
+To move everything to another machine (for example Pi -> WSL):
+```bash
+# On Pi
+cm backup /tmp/codex-multi.tar.gz
+scp /tmp/codex-multi.tar.gz user@wsl-host:~/
+
+# On WSL
+cm restore ~/codex-multi.tar.gz
+cm ls
+```
+
+If SSH on the target machine uses a custom port, pass it to `scp`:
+```bash
+scp -P 2222 /tmp/codex-multi.tar.gz user@wsl-host:~/
+```
+
 ## How it works
 
 Each account gets its own directory under `~/.codex-multi/accounts/<name>/`.
 
 `cm use <name>` creates a symlink `~/.codex → ~/.codex-multi/accounts/<name>/`, so both `codex-multi` and bare `codex` use the same account. Original `~/.codex` is backed up to `~/.codex.bak` on first run.
+
+`cm backup` archives the full `~/.codex-multi` state, including all accounts, `auth.json`, `config.toml`, and the default account marker. `cm restore` extracts that archive and recreates `~/.codex` for the restored default account when possible.
 
 ```
 ~/.codex-multi/

@@ -6,6 +6,8 @@
 #   codex-multi ls                — list all accounts
 #   codex-multi use <name>        — set default account
 #   codex-multi balance           — switch to account with most quota
+#   codex-multi backup <file>     — archive all accounts/config for transfer
+#   codex-multi restore <file>    — restore all accounts/config from archive
 #   codex-multi status [name]     — check login status
 #   codex-multi <name> [args...]  — run codex with specific account
 #   codex-multi [args...]         — run codex with default account
@@ -140,6 +142,45 @@ cmd_export() {
   local dir="$ACCOUNTS_DIR/$name"
   [ ! -f "$dir/auth.json" ] && red "No auth.json for '$name'" && exit 1
   cat "$dir/auth.json"
+}
+
+cmd_backup() {
+  local dest="$1"
+  mkdir -p "$MULTI_HOME"
+
+  if [ ! -d "$ACCOUNTS_DIR" ] || [ -z "$(find "$ACCOUNTS_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)" ]; then
+    red "No accounts to back up" && exit 1
+  fi
+
+  mkdir -p "$(dirname "$dest")"
+  tar -czf "$dest" -C "$MULTI_HOME" .
+  chmod 600 "$dest" 2>/dev/null || true
+  green "Backup created: $dest"
+}
+
+cmd_restore() {
+  local src="$1"
+  [ ! -f "$src" ] && red "File not found: $src" && exit 1
+
+  mkdir -p "$MULTI_HOME"
+  tar -xzf "$src" -C "$MULTI_HOME"
+
+  chmod 700 "$MULTI_HOME" "$ACCOUNTS_DIR" 2>/dev/null || true
+  find "$ACCOUNTS_DIR" -type d -exec chmod 700 {} \; 2>/dev/null || true
+  find "$ACCOUNTS_DIR" -type f -name auth.json -exec chmod 600 {} \; 2>/dev/null || true
+  find "$ACCOUNTS_DIR" -type f -name config.toml -exec chmod 600 {} \; 2>/dev/null || true
+  [ -f "$DEFAULT_FILE" ] && chmod 600 "$DEFAULT_FILE" 2>/dev/null || true
+
+  local default=""
+  default=$(get_default)
+  if [ -n "$default" ] && [ -d "$ACCOUNTS_DIR/$default" ]; then
+    cmd_use "$default" >/dev/null
+    green "Restored: $src"
+    dim "Default account restored: $default"
+  else
+    green "Restored: $src"
+    dim "Run: codex-multi use <name> to recreate ~/.codex symlink"
+  fi
 }
 
 cmd_rm() {
@@ -548,6 +589,12 @@ case "$1" in
     cmd_doctor ;;
   balance|bal)
     cmd_balance ;;
+  backup)
+    [ $# -lt 2 ] && red "Usage: codex-multi backup <file.tar.gz>" && exit 1
+    cmd_backup "$2" ;;
+  restore)
+    [ $# -lt 2 ] && red "Usage: codex-multi restore <file.tar.gz>" && exit 1
+    cmd_restore "$2" ;;
   reauth)
     [ $# -lt 2 ] && red "Usage: codex-multi reauth <name>" && exit 1
     cmd_reauth "$2" ;;
@@ -564,8 +611,10 @@ codex-multi — manage multiple Codex CLI accounts
 Commands:
   add <name>              Login and save a new account
   balance (bal)           Switch to account with most remaining quota
+  backup <file.tar.gz>    Archive all accounts/config for transfer
   doctor                  Check health of all accounts + codex-lb
-  reauth <name>           Re-login existing account (backup old, re-import to codex-lb)
+  restore <file.tar.gz>   Restore all accounts/config from archive
+  reauth <name>           Re-login existing account (backs up old auth, re-imports to codex-lb)
   import <name> <file|->  Import auth.json from file or stdin
   export <name>           Print auth.json to stdout
   rm <name>               Remove an account
@@ -582,6 +631,8 @@ Headless setup (SSH/remote):
 
 Examples:
   codex-multi add personal
+  codex-multi backup /tmp/codex-multi.tar.gz
+  codex-multi restore /tmp/codex-multi.tar.gz
   codex-multi import work /tmp/auth.json
   codex-multi use personal
   codex-multi work exec "list files"
