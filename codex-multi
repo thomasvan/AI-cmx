@@ -8,6 +8,8 @@
 #   codex-multi balance           — switch to account with most quota
 #   codex-multi backup <file>     — archive all accounts/config for transfer
 #   codex-multi restore <file>    — restore all accounts/config from archive
+#   codex-multi set lb <addr>     — save codex-lb URL in ~/.codex-multi
+#   codex-multi get lb            — show saved codex-lb URL
 #   codex-multi status [name]     — check login status
 #   codex-multi <name> [args...]  — run codex with specific account
 #   codex-multi [args...]         — run codex with default account
@@ -17,6 +19,7 @@ set -euo pipefail
 MULTI_HOME="${CODEX_MULTI_HOME:-$HOME/.codex-multi}"
 ACCOUNTS_DIR="$MULTI_HOME/accounts"
 DEFAULT_FILE="$MULTI_HOME/default"
+LB_URL_FILE="$MULTI_HOME/lb_url"
 
 mkdir -p "$ACCOUNTS_DIR"
 
@@ -26,6 +29,38 @@ dim()   { printf '\033[90m%s\033[0m\n' "$*"; }
 
 get_default() {
   [ -f "$DEFAULT_FILE" ] && cat "$DEFAULT_FILE" || echo ""
+}
+
+get_lb_url() {
+  [ -f "$LB_URL_FILE" ] && cat "$LB_URL_FILE" || echo ""
+}
+
+normalize_lb_url() {
+  local raw="$1"
+  python3 -c "
+import sys
+from urllib.parse import urlparse
+
+raw = sys.argv[1].strip()
+if not raw:
+    raise SystemExit(1)
+
+candidate = raw if '://' in raw else f'http://{raw}'
+parsed = urlparse(candidate)
+
+if parsed.scheme not in ('http', 'https'):
+    raise SystemExit(1)
+if not parsed.netloc:
+    raise SystemExit(1)
+if parsed.params or parsed.query or parsed.fragment:
+    raise SystemExit(1)
+
+path = parsed.path.rstrip('/')
+if path and path != '/':
+    raise SystemExit(1)
+
+print(f'{parsed.scheme}://{parsed.netloc}')
+" "$raw" 2>/dev/null
 }
 
 get_email() {
@@ -144,6 +179,49 @@ cmd_export() {
   cat "$dir/auth.json"
 }
 
+cmd_set() {
+  local key="$1"
+  local value="${2:-}"
+
+  case "$key" in
+    lb)
+      [ -z "$value" ] && red "Usage: codex-multi set lb <ip:port | http://host:port | https://host:port>" && exit 1
+      local normalized
+      normalized=$(normalize_lb_url "$value") || {
+        red "Invalid codex-lb address: $value"
+        dim "Expected: ip:port, host:port, http://host:port, or https://host:port"
+        exit 1
+      }
+      printf '%s\n' "$normalized" > "$LB_URL_FILE"
+      chmod 600 "$LB_URL_FILE" 2>/dev/null || true
+      green "codex-lb URL saved: $normalized"
+      ;;
+    *)
+      red "Unknown setting: $key"
+      dim "Supported: lb"
+      exit 1
+      ;;
+  esac
+}
+
+cmd_get() {
+  local key="$1"
+
+  case "$key" in
+    lb)
+      local url
+      url=$(get_lb_url)
+      [ -z "$url" ] && red "codex-lb URL not set" && dim "Run: codex-multi set lb <ip:port>" && exit 1
+      printf '%s\n' "$url"
+      ;;
+    *)
+      red "Unknown setting: $key"
+      dim "Supported: lb"
+      exit 1
+      ;;
+  esac
+}
+
 cmd_backup() {
   local dest="$1"
   mkdir -p "$MULTI_HOME"
@@ -244,6 +322,8 @@ cmd_status() {
 cmd_reauth() {
   local name="$1"
   local dir="$ACCOUNTS_DIR/$name"
+  local codex_lb_url
+  codex_lb_url=$(get_lb_url)
   [ ! -d "$dir" ] && red "Account '$name' not found" && exit 1
 
   local email=$(get_email "$dir")
@@ -257,9 +337,9 @@ cmd_reauth() {
   cmd_add_internal "$name"
 
   # Re-import to codex-lb if running
-  if curl -sf http://192.168.1.88:2455/api/accounts > /dev/null 2>&1; then
+  if [ -n "$codex_lb_url" ] && curl -sf "$codex_lb_url/api/accounts" > /dev/null 2>&1; then
     if [ -f "$dir/auth.json" ]; then
-      curl -sf -X POST http://192.168.1.88:2455/api/accounts/import \
+      curl -sf -X POST "$codex_lb_url/api/accounts/import" \
         -F "auth_json=@$dir/auth.json" > /dev/null 2>&1 && \
         green "Re-imported to codex-lb" || dim "codex-lb import skipped"
     fi
@@ -283,16 +363,21 @@ cmd_add_internal() {
 cmd_doctor() {
   local has_issue=0
   local codex_lb_up=false
-  local codex_lb_url="http://192.168.1.88:2455"
+  local codex_lb_url
+  codex_lb_url=$(get_lb_url)
 
   echo ""
   dim "━━━ codex-multi doctor ━━━"
   echo ""
 
   # Check codex-lb
-  if curl -sf "$codex_lb_url/api/accounts" > /dev/null 2>&1; then
+  if [ -n "$codex_lb_url" ] && curl -sf "$codex_lb_url/api/accounts" > /dev/null 2>&1; then
     codex_lb_up=true
     green "codex-lb: running"
+    dim "  → $codex_lb_url"
+  elif [ -z "$codex_lb_url" ]; then
+    dim "codex-lb: not configured"
+    dim "  → cm set lb <ip:port>"
   else
     red "codex-lb: not running"
     dim "  → sudo docker start codex-lb"
@@ -378,7 +463,7 @@ for acc in data.get('accounts', []):
         print(f'\033[90m  → sudo docker stop codex-lb && cm reauth {name} && sudo docker start codex-lb\033[0m')
     else:
         print(f'\033[31m{email}: {status}\033[0m')
-        print(f'\033[90m  → Check codex-lb dashboard: http://192.168.1.88:2455\033[0m')
+        print(f'\033[90m  → Check codex-lb dashboard: $codex_lb_url\033[0m')
 " 2>/dev/null
 
     local active=$(curl -sf "$codex_lb_url/api/accounts" | python3 -c "import json,sys; d=json.load(sys.stdin); print(sum(1 for a in d['accounts'] if a['status']=='active'))" 2>/dev/null)
@@ -401,7 +486,9 @@ for acc in data.get('accounts', []):
 }
 
 cmd_balance_lb() {
-  local codex_lb_url="http://192.168.1.88:2455"
+  local codex_lb_url
+  codex_lb_url=$(get_lb_url)
+  [ -z "$codex_lb_url" ] && return 1
   python3 -c "
 import urllib.request, json, os, base64
 
@@ -446,9 +533,11 @@ if best_name:
 
 cmd_balance() {
   local result_file=$(mktemp)
+  local codex_lb_url
+  codex_lb_url=$(get_lb_url)
 
   # Try codex-lb first (fast, cached)
-  if curl -sf http://192.168.1.88:2455/api/accounts > /dev/null 2>&1; then
+  if [ -n "$codex_lb_url" ] && curl -sf "$codex_lb_url/api/accounts" > /dev/null 2>&1; then
     dim "via codex-lb"
     cmd_balance_lb "$result_file"
   fi
@@ -583,6 +672,12 @@ case "$1" in
   use)
     [ $# -lt 2 ] && red "Usage: codex-multi use <name>" && exit 1
     cmd_use "$2" ;;
+  set)
+    [ $# -lt 3 ] && red "Usage: codex-multi set lb <ip:port | http://host:port | https://host:port>" && exit 1
+    cmd_set "$2" "$3" ;;
+  get)
+    [ $# -lt 2 ] && red "Usage: codex-multi get lb" && exit 1
+    cmd_get "$2" ;;
   status)
     cmd_status "${2:-}" ;;
   doctor)
@@ -613,8 +708,10 @@ Commands:
   balance (bal)           Switch to account with most remaining quota
   backup <file.tar.gz>    Archive all accounts/config for transfer
   doctor                  Check health of all accounts + codex-lb
+  get lb                  Show saved codex-lb URL
   restore <file.tar.gz>   Restore all accounts/config from archive
   reauth <name>           Re-login existing account (backs up old auth, re-imports to codex-lb)
+  set lb <addr>           Save codex-lb URL (supports ip:port, http://, https://)
   import <name> <file|->  Import auth.json from file or stdin
   export <name>           Print auth.json to stdout
   rm <name>               Remove an account
@@ -632,6 +729,7 @@ Headless setup (SSH/remote):
 Examples:
   codex-multi add personal
   codex-multi backup /tmp/codex-multi.tar.gz
+  codex-multi set lb 192.168.1.88:2455
   codex-multi restore /tmp/codex-multi.tar.gz
   codex-multi import work /tmp/auth.json
   codex-multi use personal

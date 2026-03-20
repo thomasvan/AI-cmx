@@ -47,6 +47,10 @@ cm status work
 cm export personal > backup.json
 cm import restored backup.json
 
+# Save codex-lb URL in ~/.codex-multi/lb_url
+cm set lb 192.168.1.88:2455
+cm get lb
+
 # Back up / restore all accounts + config
 cm backup /tmp/codex-multi.tar.gz
 cm restore /tmp/codex-multi.tar.gz
@@ -112,6 +116,16 @@ Each account gets its own directory under `~/.codex-multi/accounts/<name>/`.
 ## Config
 
 Set `CODEX_MULTI_HOME` to change the base directory (default: `~/.codex-multi`).
+
+`cm set lb <addr>` stores the codex-lb URL in `~/.codex-multi/lb_url`, so it persists across shells and machines when you back up / restore `codex-multi`.
+
+Accepted forms:
+```bash
+cm set lb 192.168.1.88:2455
+cm set lb pi.local:2455
+cm set lb http://192.168.1.88:2455
+cm set lb https://codex-lb.local:2455
+```
 
 ## License
 
