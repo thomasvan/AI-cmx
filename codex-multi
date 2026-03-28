@@ -19,7 +19,7 @@ set -euo pipefail
 MULTI_HOME="${CODEX_MULTI_HOME:-$HOME/.codex-multi}"
 ACCOUNTS_DIR="$MULTI_HOME/accounts"
 DEFAULT_FILE="$MULTI_HOME/default"
-LB_URL_FILE="$MULTI_HOME/lb_url"
+CONFIG_FILE="$MULTI_HOME/config"
 
 mkdir -p "$ACCOUNTS_DIR"
 
@@ -31,8 +31,19 @@ get_default() {
   [ -f "$DEFAULT_FILE" ] && cat "$DEFAULT_FILE" || echo ""
 }
 
-get_lb_url() {
-  [ -f "$LB_URL_FILE" ] && cat "$LB_URL_FILE" || echo ""
+get_config() {
+  local key="$1"
+  [ -f "$CONFIG_FILE" ] && grep -m1 "^${key}=" "$CONFIG_FILE" 2>/dev/null | cut -d= -f2- || echo ""
+}
+
+set_config() {
+  local key="$1" value="$2"
+  if [ -f "$CONFIG_FILE" ] && grep -q "^${key}=" "$CONFIG_FILE" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$CONFIG_FILE"
+  else
+    echo "${key}=${value}" >> "$CONFIG_FILE"
+  fi
+  chmod 600 "$CONFIG_FILE" 2>/dev/null || true
 }
 
 normalize_lb_url() {
@@ -192,8 +203,7 @@ cmd_set() {
         dim "Expected: ip:port, host:port, http://host:port, or https://host:port"
         exit 1
       }
-      printf '%s\n' "$normalized" > "$LB_URL_FILE"
-      chmod 600 "$LB_URL_FILE" 2>/dev/null || true
+      set_config "lb_url" "$normalized"
       green "codex-lb URL saved: $normalized"
       ;;
     *)
@@ -210,7 +220,7 @@ cmd_get() {
   case "$key" in
     lb)
       local url
-      url=$(get_lb_url)
+      url=$(get_config lb_url)
       [ -z "$url" ] && red "codex-lb URL not set" && dim "Run: codex-multi set lb <ip:port>" && exit 1
       printf '%s\n' "$url"
       ;;
@@ -321,27 +331,34 @@ cmd_status() {
 
 cmd_reauth() {
   local name="$1"
+  local sync_lb="$2"
   local dir="$ACCOUNTS_DIR/$name"
-  local codex_lb_url
-  codex_lb_url=$(get_lb_url)
   [ ! -d "$dir" ] && red "Account '$name' not found" && exit 1
 
   local email=$(get_email "$dir")
   dim "Re-authenticating: $name${email:+ ($email)}"
 
-  # Backup old auth
   [ -f "$dir/auth.json" ] && cp "$dir/auth.json" "$dir/auth.json.bak"
 
-  # Remove old auth and re-login
   rm -f "$dir/auth.json"
   cmd_add_internal "$name"
 
-  # Re-import to codex-lb if running
-  if [ -n "$codex_lb_url" ] && curl -sf "$codex_lb_url/api/accounts" > /dev/null 2>&1; then
-    if [ -f "$dir/auth.json" ]; then
-      curl -sf -X POST "$codex_lb_url/api/accounts/import" \
-        -F "auth_json=@$dir/auth.json" > /dev/null 2>&1 && \
-        green "Re-imported to codex-lb" || dim "codex-lb import skipped"
+  if [ "$sync_lb" = "1" ] && [ -f "$dir/auth.json" ]; then
+    local lb_url=$(get_config lb_url)
+    if [ -z "$lb_url" ]; then
+      red "lb_url not configured. Run: cm set lb <ip:port>"
+      return 1
+    fi
+    dim "Importing to codex-lb..."
+    local lb_resp
+    lb_resp=$(curl -s --max-time 10 -w "\n%{http_code}" -X POST \
+      "$lb_url/api/accounts/import" \
+      -F "auth_json=@$dir/auth.json" 2>&1)
+    local http_code=$(echo "$lb_resp" | tail -1)
+    if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+      green "Re-imported to codex-lb"
+    else
+      red "codex-lb import failed (HTTP $http_code)"
     fi
   fi
 }
@@ -364,7 +381,7 @@ cmd_doctor() {
   local has_issue=0
   local codex_lb_up=false
   local codex_lb_url
-  codex_lb_url=$(get_lb_url)
+  codex_lb_url=$(get_config lb_url)
 
   echo ""
   dim "━━━ codex-multi doctor ━━━"
@@ -421,13 +438,11 @@ except: print('unknown')
 " 2>/dev/null)
 
     if [ "$expired" = "expired" ]; then
-      red "$label: access token expired (auto-refresh sẽ lấy token mới)"
-      dim "  → Nếu refresh cũng fail: cm reauth $name"
-      has_issue=1
+      dim "$label: access token expired (auto-refreshes on next use)"
     elif [ "$expired" = "unknown" ]; then
       dim "$label: token status unknown"
     else
-      green "$label: OK (access token renew in ${expired}, auto-refresh)"
+      green "$label: OK (access token renews in ${expired})"
     fi
   done
 
@@ -487,7 +502,7 @@ for acc in data.get('accounts', []):
 
 cmd_balance_lb() {
   local codex_lb_url
-  codex_lb_url=$(get_lb_url)
+  codex_lb_url=$(get_config lb_url)
   [ -z "$codex_lb_url" ] && return 1
   python3 -c "
 import urllib.request, json, os, base64
@@ -534,7 +549,7 @@ if best_name:
 cmd_balance() {
   local result_file=$(mktemp)
   local codex_lb_url
-  codex_lb_url=$(get_lb_url)
+  codex_lb_url=$(get_config lb_url)
 
   # Try codex-lb first (fast, cached)
   if [ -n "$codex_lb_url" ] && curl -sf "$codex_lb_url/api/accounts" > /dev/null 2>&1; then
@@ -691,8 +706,17 @@ case "$1" in
     [ $# -lt 2 ] && red "Usage: codex-multi restore <file.tar.gz>" && exit 1
     cmd_restore "$2" ;;
   reauth)
-    [ $# -lt 2 ] && red "Usage: codex-multi reauth <name>" && exit 1
-    cmd_reauth "$2" ;;
+    [ $# -lt 2 ] && red "Usage: codex-multi reauth [--lb] <name>" && exit 1
+    local _sync_lb=0
+    shift
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --lb) _sync_lb=1; shift ;;
+        *) break ;;
+      esac
+    done
+    [ $# -lt 1 ] && red "Usage: codex-multi reauth [--lb] <name>" && exit 1
+    cmd_reauth "$1" "$_sync_lb" ;;
   import)
     [ $# -lt 3 ] && red "Usage: codex-multi import <name> <auth.json | ->" && exit 1
     cmd_import "$2" "$3" ;;
@@ -710,7 +734,7 @@ Commands:
   doctor                  Check health of all accounts + codex-lb
   get lb                  Show saved codex-lb URL
   restore <file.tar.gz>   Restore all accounts/config from archive
-  reauth <name>           Re-login existing account (backs up old auth, re-imports to codex-lb)
+  reauth [--lb] <name>    Re-login existing account (--lb to also import to codex-lb)
   set lb <addr>           Save codex-lb URL (supports ip:port, http://, https://)
   import <name> <file|->  Import auth.json from file or stdin
   export <name>           Print auth.json to stdout
