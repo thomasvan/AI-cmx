@@ -1,32 +1,37 @@
-# Project: codex-multi
+# Project: cmx
 
 ## Overview
-Bash wrapper for managing multiple OpenAI Codex CLI accounts. Lets users switch between ChatGPT subscriptions without login/logout cycles. Optionally integrates with **codex-lb** (a load balancer) for quota-aware account selection — configured via `~/.codex-multi/config`.
+Bash wrapper for managing multiple OpenAI Codex CLI accounts. Lets users switch between ChatGPT subscriptions without login/logout cycles. Optionally integrates with **codex-lb** (a load balancer) for quota-aware account selection — configured via `~/.cmx/config`.
 
 ## Tech Stack
-- **Bash** — single script `codex-multi` (all logic lives here)
+- **Bash** — single script `cmx` (all logic lives here)
 - **Python3** — inline snippets for JWT decoding, OpenAI API calls, JSON parsing
 - **curl** — health checks, codex-lb API, OAuth callback forwarding
 - **Dependencies:** `codex` CLI, `python3`, `bash`, `curl`
 
 ## Architecture
 ```
-codex-multi              # main script (executable, symlinked to /usr/local/bin/)
+cmx              # main script (executable, symlinked to /usr/local/bin/)
 scripts/                 # Windows helpers (WSL SSH port proxy)
 docs/                    # setup guides (WSL SSH Task Scheduler)
 .ai/                     # AI context files
 
-~/.codex-multi/          # runtime data (not in repo)
+~/.codex/                # real directory (NOT a symlink)
+├── auth.json → .../<active>/auth.json  (symlink — only this swaps)
+├── config.toml          # shared global config
+├── sessions/            # persistent across account switches
+├── plugins/             # persistent
+└── ...                  # all other state persists
+
+~/.cmx/          # runtime data (not in repo)
 ├── config               # optional config (lb_url=http://host:port)
 ├── default              # name of current default account
 └── accounts/
     └── <name>/
-        ├── auth.json    # OAuth tokens (refresh + access + id)
-        └── config.toml  # codex config
-~/.codex → ~/.codex-multi/accounts/<default>/  (symlink)
+        └── auth.json    # OAuth tokens only
 ```
 
-Key design: `cm use <name>` symlinks `~/.codex` → account dir, so both `codex-multi` and bare `codex` CLI use the same account.
+Key design: `cm use <name>` symlinks only `~/.codex/auth.json` → account's auth.json. All other codex state (sessions, plugins, hooks, config) persists across switches.
 
 ## Commands
 | Command | Description |
@@ -43,12 +48,13 @@ Key design: `cm use <name>` symlinks `~/.codex` → account dir, so both `codex-
 | `backup <file>` | Archive all accounts/config |
 | `restore <file>` | Restore from archive |
 | `status [name]` | Check login status |
+| `quota` | Show quota/usage across all accounts |
 | `<name> [args]` | Run codex with specific account |
 
 ## Build & Test
 No build step — single bash script. To install:
 ```bash
-sudo ln -sf $(pwd)/codex-multi /usr/local/bin/codex-multi
+sudo ln -sf $(pwd)/cmx /usr/local/bin/cmx
 ```
 No test suite currently. Manual testing via `cm doctor` and `cm status`.
 
@@ -56,7 +62,7 @@ No test suite currently. Manual testing via `cm doctor` and `cm status`.
 - Single-file architecture — all commands in one bash script
 - Inline Python for anything requiring JSON/JWT/HTTP (no external Python files)
 - Color output: `red()` for errors, `green()` for success, `dim()` for hints
-- No hardcoded URLs — codex-lb integration via `~/.codex-multi/config`
+- No hardcoded URLs — codex-lb integration via `~/.cmx/config`
 - Commit messages in English, imperative mood
 - `CODEX_HOME` env var controls which account `codex` uses
 
