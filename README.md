@@ -1,18 +1,20 @@
-# codex-multi
+# cmx
+
+> **Note:** This project was originally forked from [codex-multi](https://github.com/sgnjfk/codex-multi) by sgnjfk. `cmx` is a continuation with additional features including session persistence, Python rewrite, and web UI.
 
 Wrapper for managing multiple [OpenAI Codex CLI](https://github.com/openai/codex) accounts. Switch between ChatGPT subscriptions without logging in/out.
 
 ## Install
 
 ```bash
-git clone https://github.com/sgnjfk/codex-multi.git
-cd codex-multi
-sudo ln -sf $(pwd)/codex-multi /usr/local/bin/codex-multi
+git clone https://github.com/thomasvan/AI-cmx.git
+cd AI-cmx
+sudo ln -sf $(pwd)/codex-multi /usr/local/bin/cmx
 ```
 
 Add alias to `.zshrc` or `.bashrc`:
 ```bash
-alias cm="codex-multi"
+alias cm="cmx"
 ```
 
 Requires: `codex` CLI, `python3`, `bash`, `curl`
@@ -126,6 +128,14 @@ cm set lb pi.local:2455
 cm set lb http://192.168.1.88:2455
 cm set lb https://codex-lb.local:2455
 ```
+
+## Origin
+
+This project is based on [codex-multi](https://github.com/sgnjfk/codex-multi) by [sgnjfk](https://github.com/sgnjfk). The original project provided the foundation for multi-account Codex CLI management. `cmx` extends it with:
+
+- **Session persistence** — switching accounts preserves sessions, plugins, and config
+- **Python rewrite** — structured CLI with proper testing
+- **Web UI** — localhost dashboard for visual account management
 
 ## License
 
