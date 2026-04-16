@@ -1,27 +1,35 @@
 #!/usr/bin/env bash
-# codex-multi — wrapper for managing multiple Codex CLI accounts
+# cmx — wrapper for managing multiple Codex CLI accounts
 # Usage:
-#   codex-multi add <name>        — login and save a new account
-#   codex-multi rm <name>         — remove an account
-#   codex-multi ls                — list all accounts
-#   codex-multi use <name>        — set default account
-#   codex-multi balance           — switch to account with most quota
-#   codex-multi backup <file>     — archive all accounts/config for transfer
-#   codex-multi restore <file>    — restore all accounts/config from archive
-#   codex-multi set lb <addr>     — save codex-lb URL in ~/.codex-multi
-#   codex-multi get lb            — show saved codex-lb URL
-#   codex-multi status [name]     — check login status
-#   codex-multi <name> [args...]  — run codex with specific account
-#   codex-multi [args...]         — run codex with default account
+#   cmx add <name>        — login and save a new account
+#   cmx rm <name>         — remove an account
+#   cmx ls                — list all accounts
+#   cmx use <name>        — set default account
+#   cmx balance           — switch to account with most quota
+#   cmx backup <file>     — archive all accounts/config for transfer
+#   cmx restore <file>    — restore all accounts/config from archive
+#   cmx set lb <addr>     — save codex-lb URL in ~/.cmx
+#   cmx get lb            — show saved codex-lb URL
+#   cmx status [name]     — check login status
+#   cmx <name> [args...]  — run codex with specific account
+#   cmx [args...]         — run codex with default account
 
 set -euo pipefail
 
-MULTI_HOME="${CODEX_MULTI_HOME:-$HOME/.codex-multi}"
+MULTI_HOME="${CODEX_MULTI_HOME:-$HOME/.cmx}"
 ACCOUNTS_DIR="$MULTI_HOME/accounts"
 DEFAULT_FILE="$MULTI_HOME/default"
 CONFIG_FILE="$MULTI_HOME/config"
 
 mkdir -p "$ACCOUNTS_DIR"
+
+require_codex() {
+  if ! command -v codex &>/dev/null; then
+    printf '\033[31m%s\033[0m\n' "codex CLI not found"
+    printf '\033[90m%s\033[0m\n' "  → Install: npm install -g @openai/codex"
+    exit 1
+  fi
+}
 
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -158,7 +166,7 @@ cmd_add_remote() {
     [ ! -f "$DEFAULT_FILE" ] && echo "$name" > "$DEFAULT_FILE" && dim "Set as default"
   else
     red "Login failed — auth.json not created"
-    dim "Try: codex-multi import $name /path/to/auth.json"
+    dim "Try: cmx import $name /path/to/auth.json"
   fi
 }
 
@@ -196,7 +204,7 @@ cmd_set() {
 
   case "$key" in
     lb)
-      [ -z "$value" ] && red "Usage: codex-multi set lb <ip:port | http://host:port | https://host:port>" && exit 1
+      [ -z "$value" ] && red "Usage: cmx set lb <ip:port | http://host:port | https://host:port>" && exit 1
       local normalized
       normalized=$(normalize_lb_url "$value") || {
         red "Invalid codex-lb address: $value"
@@ -221,7 +229,7 @@ cmd_get() {
     lb)
       local url
       url=$(get_config lb_url)
-      [ -z "$url" ] && red "codex-lb URL not set" && dim "Run: codex-multi set lb <ip:port>" && exit 1
+      [ -z "$url" ] && red "codex-lb URL not set" && dim "Run: cmx set lb <ip:port>" && exit 1
       printf '%s\n' "$url"
       ;;
     *)
@@ -267,7 +275,7 @@ cmd_restore() {
     dim "Default account restored: $default"
   else
     green "Restored: $src"
-    dim "Run: codex-multi use <name> to set active account"
+    dim "Run: cmx use <name> to set active account"
   fi
 }
 
@@ -296,11 +304,20 @@ cmd_ls() {
       printf '%s%s\n' "$marker" "$name"
     fi
   done
-  [ $found -eq 0 ] && dim "No accounts. Run: codex-multi add <name>"
+  [ $found -eq 0 ] && dim "No accounts. Run: cmx add <name>"
 }
 
 cmd_use() {
   local name="$1"
+  local no_reload=false
+  shift || true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --no-reload) no_reload=true ;;
+    esac
+    shift
+  done
+
   [ ! -d "$ACCOUNTS_DIR/$name" ] && red "Account '$name' not found" && exit 1
   [ ! -f "$ACCOUNTS_DIR/$name/auth.json" ] && red "No auth.json for '$name'" && exit 1
 
@@ -313,7 +330,19 @@ cmd_use() {
   rm -f "$codex_home/auth.json"
   ln -s "$ACCOUNTS_DIR/$name/auth.json" "$codex_home/auth.json"
 
-  green "Default: $name (codex + codex-multi)"
+  green "Default: $name (codex + cmx)"
+
+  # Restart codex processes so they pick up the new auth
+  if [ "$no_reload" = false ]; then
+    local killed=false
+    # Kill codex app-server processes
+    pkill -HUP -f 'codex.*app-server' 2>/dev/null && killed=true
+    # Kill codex Node wrapper processes
+    pkill -HUP -f 'node.*codex' 2>/dev/null && killed=true
+    if [ "$killed" = true ]; then
+      dim "⟳ Codex stopped. Start codex CLI again or click \"Reload\" in VS Code Codex sidebar to reconnect."
+    fi
+  fi
 }
 
 cmd_status() {
@@ -358,6 +387,7 @@ cmd_reauth() {
 }
 
 cmd_add_internal() {
+  require_codex
   local name="$1"
   local dir="$ACCOUNTS_DIR/$name"
   mkdir -p "$dir"
@@ -383,7 +413,7 @@ cmd_doctor() {
   codex_lb_url=$(get_config lb_url)
 
   echo ""
-  dim "━━━ codex-multi doctor ━━━"
+  dim "━━━ cmx doctor ━━━"
   echo ""
 
   # Check codex-lb
@@ -414,7 +444,7 @@ cmd_doctor() {
       local active_name=$(basename "$(dirname "$target")")
       green "Layout: OK (auth.json → $active_name)"
     elif [ -f "$codex_home/auth.json" ]; then
-      dim "Layout: auth.json is a regular file (not managed by codex-multi)"
+      dim "Layout: auth.json is a regular file (not managed by cmx)"
     else
       dim "Layout: no auth.json in ~/.codex"
     fi
@@ -679,20 +709,22 @@ if best_name:
 }
 
 cmd_run() {
+  require_codex
   local name="$1"; shift
   [ ! -d "$ACCOUNTS_DIR/$name" ] && red "Account '$name' not found" && exit 1
   CODEX_HOME="$ACCOUNTS_DIR/$name" codex "$@"
 }
 
 cmd_run_default() {
+  require_codex
   local default=$(get_default)
-  [ -z "$default" ] && red "No default account. Run: codex-multi add <name>" && exit 1
+  [ -z "$default" ] && red "No default account. Run: cmx add <name>" && exit 1
   CODEX_HOME="$ACCOUNTS_DIR/$default" codex "$@"
 }
 
 cmd_quota() {
   echo ""
-  dim "━━━ codex-multi quota ━━━"
+  dim "━━━ cmx quota ━━━"
   echo ""
 
   local codex_lb_url
@@ -765,21 +797,21 @@ for acc in sorted(accounts, key=lambda a: a.get('email', '')):
 
 case "$1" in
   add)
-    [ $# -lt 2 ] && red "Usage: codex-multi add <name>" && exit 1
+    [ $# -lt 2 ] && red "Usage: cmx add <name>" && exit 1
     cmd_add "$2" ;;
   rm|remove)
-    [ $# -lt 2 ] && red "Usage: codex-multi rm <name>" && exit 1
+    [ $# -lt 2 ] && red "Usage: cmx rm <name>" && exit 1
     cmd_rm "$2" ;;
   ls|list)
     cmd_ls ;;
   use)
-    [ $# -lt 2 ] && red "Usage: codex-multi use <name>" && exit 1
+    [ $# -lt 2 ] && red "Usage: cmx use <name>" && exit 1
     cmd_use "$2" ;;
   set)
-    [ $# -lt 3 ] && red "Usage: codex-multi set lb <ip:port | http://host:port | https://host:port>" && exit 1
+    [ $# -lt 3 ] && red "Usage: cmx set lb <ip:port | http://host:port | https://host:port>" && exit 1
     cmd_set "$2" "$3" ;;
   get)
-    [ $# -lt 2 ] && red "Usage: codex-multi get lb" && exit 1
+    [ $# -lt 2 ] && red "Usage: cmx get lb" && exit 1
     cmd_get "$2" ;;
   status)
     cmd_status "${2:-}" ;;
@@ -790,13 +822,13 @@ case "$1" in
   quota|usage)
     cmd_quota ;;
   backup)
-    [ $# -lt 2 ] && red "Usage: codex-multi backup <file.tar.gz>" && exit 1
+    [ $# -lt 2 ] && red "Usage: cmx backup <file.tar.gz>" && exit 1
     cmd_backup "$2" ;;
   restore)
-    [ $# -lt 2 ] && red "Usage: codex-multi restore <file.tar.gz>" && exit 1
+    [ $# -lt 2 ] && red "Usage: cmx restore <file.tar.gz>" && exit 1
     cmd_restore "$2" ;;
   reauth)
-    [ $# -lt 2 ] && red "Usage: codex-multi reauth [--lb] <name>" && exit 1
+    [ $# -lt 2 ] && red "Usage: cmx reauth [--lb] <name>" && exit 1
     local _sync_lb=0
     shift
     while [ $# -gt 0 ]; do
@@ -805,17 +837,17 @@ case "$1" in
         *) break ;;
       esac
     done
-    [ $# -lt 1 ] && red "Usage: codex-multi reauth [--lb] <name>" && exit 1
+    [ $# -lt 1 ] && red "Usage: cmx reauth [--lb] <name>" && exit 1
     cmd_reauth "$1" "$_sync_lb" ;;
   import)
-    [ $# -lt 3 ] && red "Usage: codex-multi import <name> <auth.json | ->" && exit 1
+    [ $# -lt 3 ] && red "Usage: cmx import <name> <auth.json | ->" && exit 1
     cmd_import "$2" "$3" ;;
   export)
-    [ $# -lt 2 ] && red "Usage: codex-multi export <name>" && exit 1
+    [ $# -lt 2 ] && red "Usage: cmx export <name>" && exit 1
     cmd_export "$2" ;;
   help|-h|--help)
     cat << 'HELP'
-codex-multi — manage multiple Codex CLI accounts
+cmx — manage multiple Codex CLI accounts
 
 Commands:
   add <name>              Login and save a new account
@@ -839,17 +871,17 @@ Commands:
 Headless setup (SSH/remote):
   1. On PC:   CODEX_HOME=/tmp/myaccount codex login
   2. Copy:    scp /tmp/myaccount/auth.json user@pi:~/
-  3. On Pi:   codex-multi import myaccount ~/auth.json
+  3. On Pi:   cmx import myaccount ~/auth.json
 
 Examples:
-  codex-multi add personal
-  codex-multi backup /tmp/codex-multi.tar.gz
-  codex-multi set lb 192.168.1.88:2455
-  codex-multi restore /tmp/codex-multi.tar.gz
-  codex-multi import work /tmp/auth.json
-  codex-multi use personal
-  codex-multi work exec "list files"
-  codex-multi exec "list files"
+  cmx add personal
+  cmx backup /tmp/cmx.tar.gz
+  cmx set lb 192.168.1.88:2455
+  cmx restore /tmp/cmx.tar.gz
+  cmx import work /tmp/auth.json
+  cmx use personal
+  cmx work exec "list files"
+  cmx exec "list files"
 HELP
     ;;
   *)

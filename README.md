@@ -1,6 +1,6 @@
 # cmx
 
-> **Note:** This project was originally forked from [codex-multi](https://github.com/sgnjfk/codex-multi) by sgnjfk. `cmx` is a continuation with additional features including session persistence, Python rewrite, and web UI.
+> **Note:** This project was originally forked from [cmx](https://github.com/sgnjfk/cmx) by sgnjfk. `cmx` is a continuation with additional features including session persistence, Python rewrite, and web UI.
 
 Wrapper for managing multiple [OpenAI Codex CLI](https://github.com/openai/codex) accounts. Switch between ChatGPT subscriptions without logging in/out.
 
@@ -9,7 +9,7 @@ Wrapper for managing multiple [OpenAI Codex CLI](https://github.com/openai/codex
 ```bash
 git clone https://github.com/thomasvan/AI-cmx.git
 cd AI-cmx
-sudo ln -sf $(pwd)/codex-multi /usr/local/bin/cmx
+sudo ln -sf $(pwd)/cmx /usr/local/bin/cmx
 ```
 
 Add alias to `.zshrc` or `.bashrc`:
@@ -52,13 +52,13 @@ cm quota
 cm export personal > backup.json
 cm import restored backup.json
 
-# Save codex-lb URL in ~/.codex-multi/lb_url
+# Save codex-lb URL in ~/.cmx/lb_url
 cm set lb 192.168.1.88:2455
 cm get lb
 
 # Back up / restore all accounts + config
-cm backup /tmp/codex-multi.tar.gz
-cm restore /tmp/codex-multi.tar.gz
+cm backup /tmp/cmx.tar.gz
+cm restore /tmp/cmx.tar.gz
 ```
 
 ## Remote / Headless Login (SSH)
@@ -84,36 +84,36 @@ cm import myaccount ~/auth.json
 To move everything to another machine (for example Pi -> WSL):
 ```bash
 # On Pi
-cm backup /tmp/codex-multi.tar.gz
-scp /tmp/codex-multi.tar.gz user@wsl-host:~/
+cm backup /tmp/cmx.tar.gz
+scp /tmp/cmx.tar.gz user@wsl-host:~/
 
 # On WSL
-cm restore ~/codex-multi.tar.gz
+cm restore ~/cmx.tar.gz
 cm ls
 ```
 
 If SSH on the target machine uses a custom port, pass it to `scp`:
 ```bash
-scp -P 2222 /tmp/codex-multi.tar.gz user@wsl-host:~/
+scp -P 2222 /tmp/cmx.tar.gz user@wsl-host:~/
 ```
 
 ## How it works
 
-Each account stores only its `auth.json` (OAuth tokens) under `~/.codex-multi/accounts/<name>/`.
+Each account stores only its `auth.json` (OAuth tokens) under `~/.cmx/accounts/<name>/`.
 
 `cm use <name>` symlinks only `~/.codex/auth.json` → the account's `auth.json`. Everything else in `~/.codex` (sessions, plugins, hooks, config, logs) stays untouched. This means switching accounts preserves all your state.
 
-If a per-account `config.toml` exists (e.g. `~/.codex-multi/accounts/work/config.toml`), it gets merged on top of the global `~/.codex/config.toml` when you switch to that account.
+If a per-account `config.toml` exists (e.g. `~/.cmx/accounts/work/config.toml`), it gets merged on top of the global `~/.codex/config.toml` when you switch to that account.
 
 ```
 ~/.codex/                                         (real directory)
-  ├── auth.json → ~/.codex-multi/accounts/personal/auth.json  (symlink)
+  ├── auth.json → ~/.cmx/accounts/personal/auth.json  (symlink)
   ├── config.toml                                 (global, shared)
   ├── sessions/                                   (persistent)
   ├── plugins/                                    (persistent)
   └── hooks/                                      (persistent)
 
-~/.codex-multi/
+~/.cmx/
 ├── default
 ├── config
 └── accounts/
@@ -128,9 +128,9 @@ If a per-account `config.toml` exists (e.g. `~/.codex-multi/accounts/work/config
 
 ## Config
 
-Set `CODEX_MULTI_HOME` to change the base directory (default: `~/.codex-multi`).
+Set `CODEX_MULTI_HOME` to change the base directory (default: `~/.cmx`).
 
-`cm set lb <addr>` stores the codex-lb URL in `~/.codex-multi/lb_url`, so it persists across shells and machines when you back up / restore `codex-multi`.
+`cm set lb <addr>` stores the codex-lb URL in `~/.cmx/lb_url`, so it persists across shells and machines when you back up / restore `cmx`.
 
 Accepted forms:
 ```bash
@@ -142,7 +142,7 @@ cm set lb https://codex-lb.local:2455
 
 ## Origin
 
-This project is based on [codex-multi](https://github.com/sgnjfk/codex-multi) by [sgnjfk](https://github.com/sgnjfk). The original project provided the foundation for multi-account Codex CLI management. `cmx` extends it with:
+This project is based on [cmx](https://github.com/sgnjfk/cmx) by [sgnjfk](https://github.com/sgnjfk). The original project provided the foundation for multi-account Codex CLI management. `cmx` extends it with:
 
 - **Session persistence** — switching accounts preserves sessions, plugins, and config
 - **Python rewrite** — structured CLI with proper testing
