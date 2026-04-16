@@ -47,7 +47,7 @@ get_config() {
 set_config() {
   local key="$1" value="$2"
   if [ -f "$CONFIG_FILE" ] && grep -q "^${key}=" "$CONFIG_FILE" 2>/dev/null; then
-    sed -i "s|^${key}=.*|${key}=${value}|" "$CONFIG_FILE"
+    sed -i '' -e "s|^${key}=.*|${key}=${value}|" "$CONFIG_FILE"
   else
     echo "${key}=${value}" >> "$CONFIG_FILE"
   fi
@@ -88,7 +88,7 @@ get_email() {
   python3 -c "
 import json, base64, sys
 try:
-  d = json.load(open('$dir/auth.json'))
+  d = json.load(open(sys.argv[1]))
   token = d.get('tokens',{}).get('id_token','')
   if token:
     payload = token.split('.')[1]
@@ -96,7 +96,7 @@ try:
     info = json.loads(base64.b64decode(payload))
     print(info.get('email',''))
 except: pass
-" 2>/dev/null
+" "$dir/auth.json" 2>/dev/null
 }
 
 cmd_add() {
@@ -336,9 +336,9 @@ cmd_use() {
   if [ "$no_reload" = false ]; then
     local killed=false
     # Kill codex app-server processes
-    pkill -HUP -f 'codex.*app-server' 2>/dev/null && killed=true
+    pkill -TERM -f 'codex.*app-server' 2>/dev/null && killed=true
     # Kill codex Node wrapper processes
-    pkill -HUP -f 'node.*codex' 2>/dev/null && killed=true
+    pkill -TERM -f 'node.*codex' 2>/dev/null && killed=true
     if [ "$killed" = true ]; then
       dim "⟳ Codex stopped. Start codex CLI again or click \"Reload\" in VS Code Codex sidebar to reconnect."
     fi
@@ -398,6 +398,7 @@ cmd_add_internal() {
     CODEX_HOME="$dir" codex login
     # Clean up: keep only auth.json in account dir
     for f in "$dir"/*; do
+      [ -e "$f" ] || continue
       [ "$(basename "$f")" = "auth.json" ] && continue
       rm -rf "$f"
     done
@@ -470,7 +471,7 @@ cmd_doctor() {
     local expired=$(python3 -c "
 import json, time
 try:
-  d = json.load(open('$dir/auth.json'))
+  d = json.load(open(sys.argv[1]))
   ts = d.get('tokens',{}).get('access_token','')
   # Decode JWT exp
   import base64
@@ -484,7 +485,7 @@ try:
     remaining = (exp - time.time()) / 86400
     print(f'{remaining:.0f}d')
 except: print('unknown')
-" 2>/dev/null)
+" "$dir/auth.json" 2>/dev/null)
 
     if [ "$expired" = "expired" ]; then
       dim "$label: access token expired (auto-refreshes on next use)"
@@ -554,11 +555,11 @@ cmd_balance_lb() {
   codex_lb_url=$(get_config lb_url)
   [ -z "$codex_lb_url" ] && return 1
   python3 -c "
-import urllib.request, json, os, base64
+import urllib.request, json, os, base64, sys
 
-resp = urllib.request.urlopen('$codex_lb_url/api/accounts', timeout=3)
+resp = urllib.request.urlopen(sys.argv[1] + '/api/accounts', timeout=3)
 data = json.loads(resp.read())
-accounts_dir = '$ACCOUNTS_DIR'
+accounts_dir = sys.argv[2]
 
 best_name = None
 best_remaining = -1
@@ -590,9 +591,9 @@ for acc in data.get('accounts', []):
             pass
 
 if best_name:
-    with open('$1', 'w') as f:
+    with open(sys.argv[3], 'w') as f:
         f.write(f'{best_name}|{best_remaining}')
-" 2>/dev/null
+" "$codex_lb_url" "$ACCOUNTS_DIR" "$1" 2>/dev/null
 }
 
 cmd_balance() {
@@ -612,7 +613,7 @@ cmd_balance() {
     python3 -c "
 import json, os, base64, urllib.request, sys
 
-accounts_dir = '$ACCOUNTS_DIR'
+accounts_dir = sys.argv[1]
 AUTH_URL = 'https://auth.openai.com/oauth/token'
 USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
 CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
@@ -682,9 +683,9 @@ for name in sorted(os.listdir(accounts_dir)):
         continue
 
 if best_name:
-    with open('$result_file', 'w') as f:
+    with open(sys.argv[2], 'w') as f:
         f.write(f'{best_name}|{best_remaining}')
-"
+" "$ACCOUNTS_DIR" "$result_file"
   fi
 
   local result=$(cat "$result_file" 2>/dev/null)
@@ -806,7 +807,7 @@ case "$1" in
     cmd_ls ;;
   use)
     [ $# -lt 2 ] && red "Usage: cmx use <name>" && exit 1
-    cmd_use "$2" ;;
+    shift; cmd_use "$@" ;;
   set)
     [ $# -lt 3 ] && red "Usage: cmx set lb <ip:port | http://host:port | https://host:port>" && exit 1
     cmd_set "$2" "$3" ;;
@@ -829,7 +830,7 @@ case "$1" in
     cmd_restore "$2" ;;
   reauth)
     [ $# -lt 2 ] && red "Usage: cmx reauth [--lb] <name>" && exit 1
-    local _sync_lb=0
+    _sync_lb=0
     shift
     while [ $# -gt 0 ]; do
       case "$1" in
