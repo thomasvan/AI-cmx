@@ -16,17 +16,22 @@ scripts/                 # Windows helpers (WSL SSH port proxy)
 docs/                    # setup guides (WSL SSH Task Scheduler)
 .ai/                     # AI context files
 
+~/.codex/                # real directory (NOT a symlink)
+├── auth.json → .../<active>/auth.json  (symlink — only this swaps)
+├── config.toml          # shared global config
+├── sessions/            # persistent across account switches
+├── plugins/             # persistent
+└── ...                  # all other state persists
+
 ~/.codex-multi/          # runtime data (not in repo)
 ├── config               # optional config (lb_url=http://host:port)
 ├── default              # name of current default account
 └── accounts/
     └── <name>/
-        ├── auth.json    # OAuth tokens (refresh + access + id)
-        └── config.toml  # codex config
-~/.codex → ~/.codex-multi/accounts/<default>/  (symlink)
+        └── auth.json    # OAuth tokens only
 ```
 
-Key design: `cm use <name>` symlinks `~/.codex` → account dir, so both `codex-multi` and bare `codex` CLI use the same account.
+Key design: `cm use <name>` symlinks only `~/.codex/auth.json` → account's auth.json. All other codex state (sessions, plugins, hooks, config) persists across switches.
 
 ## Commands
 | Command | Description |
@@ -43,6 +48,7 @@ Key design: `cm use <name>` symlinks `~/.codex` → account dir, so both `codex-
 | `backup <file>` | Archive all accounts/config |
 | `restore <file>` | Restore from archive |
 | `status [name]` | Check login status |
+| `quota` | Show quota/usage across all accounts |
 | `<name> [args]` | Run codex with specific account |
 
 ## Build & Test

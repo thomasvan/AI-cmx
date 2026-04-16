@@ -31,7 +31,7 @@ cm ls
 # * personal (you@gmail.com)
 #   work (you@company.com)
 
-# Switch default (switches for both codex-multi AND bare codex)
+# Switch default (symlinks only auth.json — sessions/plugins/hooks persist)
 cm use work
 
 # Run codex with default account
@@ -44,6 +44,9 @@ cm personal exec "list files"
 # Check login status
 cm status
 cm status work
+
+# Check quota/usage across all accounts
+cm quota
 
 # Export / import auth
 cm export personal > backup.json
@@ -96,24 +99,32 @@ scp -P 2222 /tmp/codex-multi.tar.gz user@wsl-host:~/
 
 ## How it works
 
-Each account gets its own directory under `~/.codex-multi/accounts/<name>/`.
+Each account stores only its `auth.json` (OAuth tokens) under `~/.codex-multi/accounts/<name>/`.
 
-`cm use <name>` creates a symlink `~/.codex → ~/.codex-multi/accounts/<name>/`, so both `codex-multi` and bare `codex` use the same account. Original `~/.codex` is backed up to `~/.codex.bak` on first run.
+`cm use <name>` symlinks only `~/.codex/auth.json` → the account's `auth.json`. Everything else in `~/.codex` (sessions, plugins, hooks, config, logs) stays untouched. This means switching accounts preserves all your state.
 
-`cm backup` archives the full `~/.codex-multi` state, including all accounts, `auth.json`, `config.toml`, and the default account marker. `cm restore` extracts that archive and recreates `~/.codex` for the restored default account when possible.
+If a per-account `config.toml` exists (e.g. `~/.codex-multi/accounts/work/config.toml`), it gets merged on top of the global `~/.codex/config.toml` when you switch to that account.
 
 ```
+~/.codex/                                         (real directory)
+  ├── auth.json → ~/.codex-multi/accounts/personal/auth.json  (symlink)
+  ├── config.toml                                 (global, shared)
+  ├── sessions/                                   (persistent)
+  ├── plugins/                                    (persistent)
+  └── hooks/                                      (persistent)
+
 ~/.codex-multi/
 ├── default
+├── config
 └── accounts/
     ├── personal/
-    │   ├── auth.json
-    │   └── config.toml
+    │   └── auth.json
     └── work/
         ├── auth.json
-        └── config.toml
-~/.codex → ~/.codex-multi/accounts/personal/  (symlink)
+        └── config.toml  (optional per-account overrides)
 ```
+
+**Migration:** If you're upgrading from the old layout (where `~/.codex` was a symlink to the entire account directory), run `cm use <name>` — it auto-detects and migrates with confirmation.
 
 ## Config
 
